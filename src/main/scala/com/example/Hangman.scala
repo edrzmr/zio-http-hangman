@@ -1,5 +1,9 @@
 package com.example
-import com.example.model.{Guess, GuessResult, Name, State, Word}
+
+import com.example.model.Word.WordId
+import com.example.model.error.NotFoundError
+import com.example.model.{ Guess, GuessResult, Name, State, Word }
+import com.example.repository.WordRepository
 
 import java.io.IOException
 import zio._
@@ -20,11 +24,14 @@ object Hangman extends ZIOAppDefault {
       name  <- ZIO.from(Name.make(input)) <> (Console.printLine("Invalid input. Please try again...") <*> getName)
     } yield name
 
-  lazy val chooseWord: UIO[Word] =
+  val chooseWord: ZIO[WordRepository, NotFoundError, Word] = {
     for {
-      index <- Random.nextIntBounded(words.length)
-      word  <- ZIO.from(words.lift(index).flatMap(Word.make)).orDieWith(_ => new Error("Boom!"))
+      repo   <- ZIO.service[WordRepository]
+      index  <- Random.nextLongBounded(repo.count)
+      wordId = WordId.make(index)
+      word   <- repo.get(wordId)
     } yield word
+  }
 
   def gameLoop(oldState: State): IO[IOException, Unit] =
     for {
@@ -92,10 +99,15 @@ object Hangman extends ZIOAppDefault {
     }
   }
 
-  val run: IO[IOException, Unit] =
+  private val program: ZIO[WordRepository, IOException, Unit] =
     for {
       name <- Console.printLine("Welcome to ZIO Hangman!") <*> getName
-      word <- chooseWord
+      word <- chooseWord.mapError(error => new IOException(error.message))
       _    <- gameLoop(State.initial(name, word))
     } yield ()
+
+  override val run = program.provide(
+    Layers.wordRepositoryLayer
+  )
 }
+
