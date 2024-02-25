@@ -1,6 +1,7 @@
 package com.example
-import java.io.IOException
+import com.example.model.{Guess, GuessResult, Name, State, Word}
 
+import java.io.IOException
 import zio._
 
 object Hangman extends ZIOAppDefault {
