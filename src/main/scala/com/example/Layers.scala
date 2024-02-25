@@ -5,5 +5,5 @@ import zio._
 
 object Layers {
 
-  val wordRepositoryLayer: ULayer[WordRepository] = InMemoryWordRepository.live
+  val wordRepositoryLayer: ULayer[WordRepository] = InMemoryWordRepository.live(InMemoryWordRepository.DEFAULT_RESOURCE_FILENAME)
 }
