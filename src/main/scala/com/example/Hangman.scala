@@ -1,9 +1,10 @@
 package com.example
 
+import com.example.model.State.StateId
 import com.example.model.Word.WordId
-import com.example.model.error.NotFoundError
+import com.example.model.error._
 import com.example.model.{ Guess, GuessResult, Name, State, Word }
-import com.example.repository.WordRepository
+import com.example.repository.{ StateRepository, WordRepository }
 
 import java.io.IOException
 import zio._
@@ -33,23 +34,38 @@ object Hangman extends ZIOAppDefault {
     } yield word
   }
 
-  def gameLoop(oldState: State): IO[IOException, Unit] =
+  def gameLoop(stateId: StateId): ZIO[StateRepository, Throwable, Unit] =
     for {
-      guess       <- renderState(oldState) <*> getGuess
-      newState    = oldState.addGuess(guess)
-      guessResult = analyzeNewGuess(oldState, newState, guess)
+      stateRepo   <- ZIO.service[StateRepository]
+      stateWriter = stateRepo.write(stateId)(_)
+      oldState    <- stateRepo.read(stateId).mapError(_.asThrowable)
+
+      guess                    <- renderState(oldState) <*> getGuess
+      newState: State          = oldState.addGuess(guess)
+      guessResult: GuessResult = analyzeNewGuess(oldState, newState, guess)
+
       _ <- guessResult match {
             case GuessResult.Won =>
-              Console.printLine(s"Congratulations ${newState.name.name}! You won!") <*> renderState(newState)
+              Console.printLine(s"Congratulations ${newState.name.name}! You won!") <*>
+                renderState(newState)
             case GuessResult.Lost =>
               Console.printLine(s"Sorry ${newState.name.name}! You Lost! Word was: ${newState.word.word}") <*>
                 renderState(newState)
             case GuessResult.Correct =>
-              Console.printLine(s"Good guess, ${newState.name.name}!") <*> gameLoop(newState)
+              for {
+                _ <- stateWriter(newState).mapError(_.asThrowable)
+                _ <- Console.printLine(s"Good guess, ${newState.name.name}!")
+                _ <- gameLoop(stateId)
+              } yield ()
             case GuessResult.Incorrect =>
-              Console.printLine(s"Bad guess, ${newState.name.name}!") <*> gameLoop(newState)
+              for {
+                _ <- stateWriter(newState).mapError(_.asThrowable)
+                _ <- Console.printLine(s"Bad guess, ${newState.name.name}!")
+                _ <- gameLoop(stateId)
+              } yield ()
             case GuessResult.Unchanged =>
-              Console.printLine(s"${newState.name.name}, You've already tried that letter!") <*> gameLoop(newState)
+              Console.printLine(s"${newState.name.name}, You've already tried that letter!") <*>
+                gameLoop(stateId)
           }
     } yield ()
 
@@ -75,8 +91,8 @@ object Hangman extends ZIOAppDefault {
         -  -  -  -  -  -  -
         Guesses: a, z, y, x
      */
-    val hangman = ZIO.attempt(hangmanStages(state.failuresCount)).orDie
-    val word =
+    val hangman: UIO[String] = ZIO.attempt(hangmanStages(state.failuresCount)).orDie
+    val word: String =
       state.word.toList
         .map(c => if (state.guesses.map(_.char).contains(c)) s" $c " else "   ")
         .mkString
@@ -99,15 +115,23 @@ object Hangman extends ZIOAppDefault {
     }
   }
 
-  private val program: ZIO[WordRepository, IOException, Unit] =
+  private type Env = WordRepository with StateRepository
+
+  private val program: ZIO[Env, Throwable, Unit] =
     for {
       name <- Console.printLine("Welcome to ZIO Hangman!") <*> getName
-      word <- chooseWord.mapError(error => new IOException(error.message))
-      _    <- gameLoop(State.initial(name, word))
+      word <- chooseWord.mapError(_.asThrowable)
+
+      initialState = State.initial(name, word)
+      stateRepo    <- ZIO.service[StateRepository]
+      stateId      <- stateRepo.create(initialState).mapError(_.asThrowable)
+      _            <- Console.printLine(s"Your Id: ${stateId.value}")
+
+      _ <- gameLoop(stateId)
     } yield ()
 
   override val run = program.provide(
-    Layers.wordRepositoryLayer
+    Layers.wordRepositoryLayer,
+    Layers.stareRepositoryLayer
   )
 }
-
